@@ -24,20 +24,51 @@ export async function POST(request: Request) {
     const prompt = generatePrompt(documentContext, documentGoal, noteContent);
 
     // Call OpenAI API with the new client
-    const response = await openai.chat.completions.create({
+    const response = await openai.responses.create({
       model: 'gpt-4o',
-      messages: [
+      input: [
         {
           role: 'system',
           content: prompt
         }
       ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "SearchResults",
+          schema: {
+            type: "object",
+            properties: {
+              results: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      type: "string",
+                      enum: ["Expansion Ideas", "Alternative Perspectives", "Relevance"],
+                      description: "The section of the response"
+                    },
+                    description: {
+                      type: "string",
+                      description: "Detailed description of the section"
+                    }
+                  },
+                  required: ["label", "description"],
+                  additionalProperties: false
+                }
+              }
+            },
+            required: ["results"],
+            additionalProperties: false
+          }
+        }
+      },
       temperature: 0.7,
-      max_tokens: 800
+      max_output_tokens: 800
     });
-
     // Extract content from the response
-    const content = response.choices[0].message.content;
+    const content = response.output_text;
     
     if (!content) {
       return NextResponse.json(
@@ -61,95 +92,46 @@ export async function POST(request: Request) {
 
 function generatePrompt(documentContext: string, documentGoal: string, noteContent: string) {
   return `
-You are an AI writing assistant that helps users integrate research notes into their document. 
+ You are an AI writing assistant that helps users integrate research notes into their documents. The available context:
 
 ### Context:
-The user is working on a document with the goal: "${documentGoal}"
+The user is working on a document with prompt: "${documentGoal}"
 The current document content is: "${documentContext}"
 The user has added a note they want to incorporate: "${noteContent}"
 
-Your task is to analyze the note in relation to the document and provide the following:
- 
-1. **Expansion Ideas**: Suggest ways to develop the note further with supporting details.  
-2. **Alternative Perspectives**: Challenge the note or offer contrasting viewpoints. 
+Your task is to analyze the note in relation to the document and essay prompt and provide the following:
+1. **Expansion Ideas**: Suggest ways to develop the note further with supporting details.
+2. **Alternative Perspectives**: Challenge the note or offer contrasting viewpoints IF some evidence supports a contrasting viewpoint.
+3. ** Relevance**: Try and guess the note's relevance to the overall document and essay prompt. 
 
-Create a few bullet points for each, make them thought provoking and engaging. 
+Create 1 bullet point for each section and make them thought-provoking and engaging. 
 
-### Provide a structured response:
-- **Expansion Ideas:** 
-- **Alternative Perspectives:** 
+Format as JSON array with label (Expansion Ideas, Alternative Perspectives, Relevance) and description fields 
 `;
 }
 
 function parseAIResponse(aiResponse: string) {
-  // Create an object to store the parsed sections
-  const result: any = {
-    integrationSuggestions: [],
-    expansionIdeas: [],
-    relevantLinks: [],
-    alternativePerspectives: []
-  };
-
-  // Current section being processed
-  let currentSection = '';
-  
-  // Split the response into lines and process each line
-  const lines = aiResponse.split('\n');
-  
-  for (const line of lines) {
-    const trimmedLine = line.trim();
+  try {
+    // Parse the JSON response
+    const parsed = JSON.parse(aiResponse);
     
-    // Determine which section we're in
-    if (trimmedLine.includes('Integration Suggestions:')) {
-      currentSection = 'integrationSuggestions';
-      continue;
-    } else if (trimmedLine.includes('Expansion Ideas:')) {
-      currentSection = 'expansionIdeas';
-      continue;
-    } else if (trimmedLine.includes('Relevant Links:')) {
-      currentSection = 'relevantLinks';
-      continue;
-    } else if (trimmedLine.includes('Alternative Perspectives:')) {
-      currentSection = 'alternativePerspectives';
-      continue;
-    }
-    
-    // Skip empty lines
-    if (!trimmedLine) continue;
-    
-    // Process the line based on the current section
-    if (currentSection && trimmedLine.startsWith('-') || trimmedLine.startsWith('•') || trimmedLine.match(/^\d+\./)) {
-      // Clean up the line (remove the bullet point or number)
-      const cleanedLine = trimmedLine.replace(/^[-•]|\d+\.\s+/, '').trim();
-      
-      // Extract link information if in the relevant links section
-      if (currentSection === 'relevantLinks' && trimmedLine.includes('[') && trimmedLine.includes(']')) {
-        const linkMatch = trimmedLine.match(/\[(.*?)\]\((.*?)\)/);
-        if (linkMatch) {
-          result[currentSection].push({
-            title: linkMatch[1],
-            url: linkMatch[2]
-          });
-        } else {
-          result[currentSection].push(cleanedLine);
+    // Map the results to bullet points
+    return {
+      bulletPoints: parsed.results.map((item: { label: string; description: string }) => {
+        switch (item.label) {
+          case "Expansion Ideas":
+            return `Expand: ${item.description}`;
+          case "Alternative Perspectives":
+            return `Alternative: ${item.description}`;
+          case "Relevance":
+            return `Relevance: ${item.description}`;
+          default:
+            return "";
         }
-      } else if (cleanedLine) {
-        result[currentSection].push(cleanedLine);
-      }
-    }
+      }).filter(Boolean)
+    };
+  } catch (error) {
+    console.error("Error parsing AI response:", error);
+    return { bulletPoints: [] };
   }
-  
-  // Convert to the expected format for the frontend
-  return {
-    bulletPoints: [
-      ...result.integrationSuggestions.map((item: string) => `Integration: ${item}`),
-      ...result.expansionIdeas.map((item: string) => `Expand: ${item}`),
-      ...result.relevantLinks.map((item: any) => 
-        typeof item === 'string' 
-          ? `Source: ${item}` 
-          : `Source: ${item.title} (${item.url})`
-      ),
-      ...result.alternativePerspectives.map((item: string) => `Alternative: ${item}`)
-    ]
-  };
 } 

@@ -123,6 +123,7 @@ export async function generateBrainstormIdeas(request: BrainstormRequest): Promi
     
     const data = await response.json();
     
+    console.log("Brainstorm Response:", data);
     // Check if the API returned an error
     if (data.error) {
       console.error("API returned an error:", data.error);

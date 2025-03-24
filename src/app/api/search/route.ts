@@ -3,13 +3,15 @@ import OpenAI from 'openai';
 
 // Initialize the OpenAI client
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY as string,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 export async function POST(request: Request) {
   try {
     // Get the request body
     const body = await request.json();
+
+    // TODO: Change the documentContext to the actual document context, not dummy data
     const { documentContext, documentGoal, noteContent } = body;
 
     // Validate input
@@ -37,35 +39,41 @@ export async function POST(request: Request) {
 }
 
 async function generateSearchQuery(documentContext: string, documentGoal: string, noteContent: string): Promise<string> {
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [
+
+  const response = await openai.responses.create({
+    model: "gpt-4o",
+    input: [
       {
-        role: 'system',
-        content: `You are an AI assistant that helps generate effective search queries. 
-        Based on the following information, create a concise search query (max 10 words) that would help find relevant academic or informational sources.
+        "role": "system",
+        "content": `You are a helpful essay-writing assistant that generates concise search queries from user input. 
+        Based on the submitted note and essay prompt, create a concise search query (max 10 words) that would help find relevant academic or informational sources.
         
-        Document Goal: "${documentGoal}"
-        Document Context: "${documentContext}"
-        User's Note: "${noteContent}"
+        Essay Prompt: "${documentGoal}"
+        SubmittedNote: "${noteContent}"
         
-        Return ONLY the search query text, and also explain how it could fit into the document goal and context.`
+        Return ONLY the search query text`
       }
     ],
+    text: {
+      "format": {
+        "type": "text"
+      }
+    },
     temperature: 0.3,
-    max_tokens: 50
+    max_output_tokens: 50,
   });
-
-  return response.choices[0].message.content?.trim() || noteContent;
+  console.log(response.output_text);
+  return response.output_text|| noteContent;
 }
 
 async function generateWebResults(searchQuery: string, documentContext: string) {
-  const response = await openai.chat.completions.create({
+  const response = await openai.responses.create({
     model: 'gpt-4o',
-    messages: [
+    tools: [ { type: "web_search_preview", search_context_size: "medium"} ],
+    input: [
       {
         role: 'system',
-        content: `You are an AI assistant that generates mock search results. The user is searching for: "${searchQuery}" in the context of: "${documentContext}".
+        "content": `You are an AI assistant that generates mock search results. The user is searching for: "${searchQuery}" in the context of: "${documentContext}".
         
         Create 3 highly relevant search results that would be helpful for research on this topic. Each result should include:
         1. Title (be specific, include names, dates, and institutions where appropriate)
@@ -75,13 +83,46 @@ async function generateWebResults(searchQuery: string, documentContext: string) 
         Format as JSON array with title, url, and description fields. URLs should be properly formatted and look realistic (e.g., https://www.example.com/path).`
       }
     ],
-    response_format: { type: "json_object" },
+    text: {
+      format: {
+        type: "json_schema",
+        name: "SearchResults",
+        schema: {
+          type: "object",
+          properties: {
+            results: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  title: {
+                    type: "string"
+                  },
+                  url: {
+                    type: "string"
+                  },
+                  description: {
+                    type: "string"
+                  }
+                },
+                required: ["title", "url", "description"],
+                additionalProperties: false
+              }
+            }
+          },
+          required: ["results"],
+          additionalProperties: false
+        }
+      }
+    },
     temperature: 0.7,
-    max_tokens: 600
+    max_output_tokens: 1000
   });
+  console.log(response.output_text);
+
 
   try {
-    const content = response.choices[0].message.content;
+    const content = response.output_text;
     if (!content) {
       throw new Error('Empty response from OpenAI');
     }
